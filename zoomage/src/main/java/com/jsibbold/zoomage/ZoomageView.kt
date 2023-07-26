@@ -343,9 +343,9 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
                     val focusy = scaleDetector!!.focusY
                     if (allowTranslate(event)) {
                         //calculate the distance for translation
-                        val xdistance = getXDistance(focusx, last.x)
-                        val ydistance = getYDistance(focusy, last.y)
-                        matrix.postTranslate(xdistance, ydistance)
+                        val xDistance = getXDistance(focusx, last.x)
+                        val yDistance = getYDistance(focusy, last.y)
+                        matrix.postTranslate(xDistance, yDistance)
                     }
                     if (allowZoom(event)) {
                         matrix.postScale(scaleBy, scaleBy, focusx, focusy)
@@ -375,7 +375,8 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     }
 
     private fun allowTranslate(event: MotionEvent?): Boolean {
-        return isTranslatable && currentScaleFactor > 1.0f
+        // The last condition enables translating only when the user has two fingers on the screen.
+        return isTranslatable && currentScaleFactor > 1.0f && (event == null || event.pointerCount >= 2)
     }
 
     private fun allowZoom(event: MotionEvent?): Boolean {
