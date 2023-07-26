@@ -4,8 +4,12 @@ import android.animation.Animator
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.PointF
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.net.Uri
@@ -15,6 +19,12 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import androidx.appcompat.widget.AppCompatImageView
 import androidx.core.view.ScaleGestureDetectorCompat
+import com.divyanshu.draw.widget.MyPath
+import java.io.Serializable
+
+
+data class PaintOptions(var color: Int = Color.parseColor("#660000FF"), var strokeWidth: Float = 19f, var alpha: Int = 50) : Serializable
+
 
 /**
  * ZoomageView is a pinch-to-zoom extension of [ImageView], providing a smooth
@@ -23,6 +33,19 @@ import androidx.core.view.ScaleGestureDetectorCompat
  * visible window.
  */
 open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGestureListener {
+
+    private var paths = LinkedHashMap<MyPath, PaintOptions>()
+    private var lastPaths = LinkedHashMap<MyPath, PaintOptions>()
+    private var undonePaths = LinkedHashMap<MyPath, PaintOptions>()
+    private var paint = Paint()
+    private var myPath = MyPath()
+    private var paintOptions = PaintOptions()
+    private var currentX = 0f
+    private var currentY = 0f
+    private var startX = 0f
+    private var startY = 0f
+
+
     private val RESET_DURATION = 200
     private var startScaleType: ScaleType? = null
 
@@ -140,7 +163,7 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     private var currentScaleFactor = 1f
     private var previousPointerCount = 1
     private var currentPointerCount = 0
-    private var scaleDetector: ScaleGestureDetector? = null
+    private var scaleGestureDetector: ScaleGestureDetector? = null
     private var resetAnimator: ValueAnimator? = null
     private var gestureDetector: GestureDetector? = null
     private var doubleTapDetected = false
@@ -159,9 +182,18 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     }
 
     private fun init(context: Context, attrs: AttributeSet?) {
-        scaleDetector = ScaleGestureDetector(context, this)
+        paint.apply {
+            color = paintOptions.color
+            style = Paint.Style.STROKE
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
+            strokeWidth = paintOptions.strokeWidth
+            isAntiAlias = true
+        }
+
+        scaleGestureDetector = ScaleGestureDetector(context, this)
         gestureDetector = GestureDetector(context, gestureListener)
-        ScaleGestureDetectorCompat.setQuickScaleEnabled(scaleDetector, false)
+        ScaleGestureDetectorCompat.setQuickScaleEnabled(scaleGestureDetector, false)
         startScaleType = scaleType
         val values = context.obtainStyledAttributes(attrs, R.styleable.ZoomageView)
         isZoomable = values.getBoolean(R.styleable.ZoomageView_zoomage_zoomable, true)
@@ -169,7 +201,7 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
         animateOnReset = values.getBoolean(R.styleable.ZoomageView_zoomage_animateOnReset, true)
         autoCenter = values.getBoolean(R.styleable.ZoomageView_zoomage_autoCenter, true)
         restrictBounds = values.getBoolean(R.styleable.ZoomageView_zoomage_restrictBounds, false)
-        doubleTapToZoom = values.getBoolean(R.styleable.ZoomageView_zoomage_doubleTapToZoom, true)
+        doubleTapToZoom = values.getBoolean(R.styleable.ZoomageView_zoomage_doubleTapToZoom, false)
         minScale = values.getFloat(R.styleable.ZoomageView_zoomage_minScale, MIN_SCALE)
         maxScale = values.getFloat(R.styleable.ZoomageView_zoomage_maxScale, MAX_SCALE)
         doubleTapToZoomScaleFactor = values.getFloat(R.styleable.ZoomageView_zoomage_doubleTapToZoomScaleFactor, 3f)
@@ -202,25 +234,6 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
         this.minScale = minScale
         this.maxScale = maxScale
         startValues = null
-        verifyScaleRange()
-    }
-
-    /**
-     * Gets the double tap to zoom scale factor.
-     *
-     * @return double tap to zoom scale factor
-     */
-    fun getDoubleTapToZoomScaleFactor(): Float {
-        return doubleTapToZoomScaleFactor
-    }
-
-    /**
-     * Sets the double tap to zoom scale factor. Can be a maximum of max scale.
-     *
-     * @param doubleTapToZoomScaleFactor the scale factor you want to zoom to when double tap occurs
-     */
-    fun setDoubleTapToZoomScaleFactor(doubleTapToZoomScaleFactor: Float) {
-        this.doubleTapToZoomScaleFactor = doubleTapToZoomScaleFactor
         verifyScaleRange()
     }
 
@@ -292,16 +305,45 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     private val currentDisplayedHeight: Float
         get() = if (drawable != null) drawable.intrinsicHeight * matrixValues[Matrix.MSCALE_Y] else 0F
 
-    /**
-     * Remember our starting values so we can animate our image back to its original position.
-     */
-    private fun setStartValues() {
-        startValues = FloatArray(9)
-        startMatrix = Matrix(imageMatrix)
-        startMatrix.getValues(startValues)
-        calculatedMinScale = minScale * startValues!![Matrix.MSCALE_X]
-        calculatedMaxScale = maxScale * startValues!![Matrix.MSCALE_X]
+
+    fun resetPaths() {
+        undonePaths.clear()
+        paths.clear()
+        lastPaths.clear()
+
+        //backgroundBitmap = null
+        lastPaths = paths.clone() as LinkedHashMap<MyPath, PaintOptions>
+        myPath.reset()
+        paths.clear()
+        invalidate()
     }
+
+
+    fun getBitmap(): Bitmap {
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.WHITE)
+        draw(canvas)
+        return bitmap
+    }
+
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+
+
+        matrix.postScale(currentScaleFactor, currentScaleFactor)
+
+        canvas.setMatrix(matrix)
+
+
+        for ((key, _) in paths) {
+            canvas.drawPath(key, paint)
+        }
+
+        canvas.drawPath(myPath, paint)
+    }
+
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!isClickable && isEnabled && (isZoomable || isTranslatable)) {
@@ -317,7 +359,7 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
             matrix.set(imageMatrix)
             matrix.getValues(matrixValues)
             updateBounds(matrixValues)
-            scaleDetector!!.onTouchEvent(event)
+            scaleGestureDetector!!.onTouchEvent(event)
             gestureDetector!!.onTouchEvent(event)
             if (doubleTapToZoom && doubleTapDetected) {
                 doubleTapDetected = false
@@ -326,21 +368,21 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
                     reset()
                 } else {
                     val zoomMatrix = Matrix(matrix)
-                    zoomMatrix.postScale(doubleTapToZoomScaleFactor, doubleTapToZoomScaleFactor, scaleDetector!!.focusX, scaleDetector!!.focusY)
+                    zoomMatrix.postScale(doubleTapToZoomScaleFactor, doubleTapToZoomScaleFactor, scaleGestureDetector!!.focusX, scaleGestureDetector!!.focusY)
                     animateScaleAndTranslationToMatrix(zoomMatrix, RESET_DURATION)
                 }
                 return true
             } else if (!singleTapDetected) {
+
+
                 /* if the event is a down touch, or if the number of touch points changed,
                  * we should reset our start point, as event origins have likely shifted to a
                  * different part of the screen*/
-                if (event.actionMasked == MotionEvent.ACTION_DOWN ||
-                    currentPointerCount != previousPointerCount
-                ) {
-                    last[scaleDetector!!.focusX] = scaleDetector!!.focusY
+                if (event.actionMasked == MotionEvent.ACTION_DOWN || currentPointerCount != previousPointerCount) {
+                    last[scaleGestureDetector!!.focusX] = scaleGestureDetector!!.focusY
                 } else if (event.actionMasked == MotionEvent.ACTION_MOVE) {
-                    val focusx = scaleDetector!!.focusX
-                    val focusy = scaleDetector!!.focusY
+                    val focusx = scaleGestureDetector!!.focusX
+                    val focusy = scaleGestureDetector!!.focusY
                     if (allowTranslate(event)) {
                         //calculate the distance for translation
                         val xDistance = getXDistance(focusx, last.x)
@@ -354,12 +396,46 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
                     imageMatrix = matrix
                     last[focusx] = focusy
                 }
-                if (event.actionMasked == MotionEvent.ACTION_UP ||
-                    event.actionMasked == MotionEvent.ACTION_CANCEL
-                ) {
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
                     scaleBy = 1f
                     resetImage()
                 }
+
+
+
+
+                val x = last.x
+                val y = last.y
+
+                if (event.pointerCount < 2) {
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            startX = x
+                            startY = y
+                            myPath.reset()
+                            myPath.moveTo(x, y)
+                            currentX = x
+                            currentY = y
+                            undonePaths.clear()
+                        }
+
+                        MotionEvent.ACTION_MOVE -> {
+                            myPath.quadTo(currentX, currentY, (x + currentX) / 2, (y + currentY) / 2)
+                            currentX = x
+                            currentY = y
+                        }
+
+                        MotionEvent.ACTION_UP -> {
+                            myPath.lineTo(currentX, currentY)
+                            paths[myPath] = paintOptions
+                            myPath = MyPath()
+                            paintOptions = PaintOptions(paintOptions.color, paintOptions.strokeWidth, paintOptions.alpha)
+                        }
+                    }
+                    invalidate()
+                }
+
+
             }
             parent.requestDisallowInterceptTouchEvent(disallowParentTouch(event))
 
@@ -368,6 +444,16 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
             return true
         }
         return super.onTouchEvent(event)
+    }
+
+
+    // Remember our starting values so we can animate our image back to its original position.
+    private fun setStartValues() {
+        startValues = FloatArray(9)
+        startMatrix = Matrix(imageMatrix)
+        startMatrix.getValues(startValues)
+        calculatedMinScale = minScale * startValues!![Matrix.MSCALE_X]
+        calculatedMaxScale = maxScale * startValues!![Matrix.MSCALE_X]
     }
 
     private fun disallowParentTouch(event: MotionEvent?): Boolean {
@@ -574,12 +660,12 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     private fun getRestrictedXDistance(xdistance: Float): Float {
         var restrictedXDistance = xdistance
         if (currentDisplayedWidth >= width) {
-            if (bounds.left <= 0 && bounds.left + xdistance > 0 && !scaleDetector!!.isInProgress) {
+            if (bounds.left <= 0 && bounds.left + xdistance > 0 && !scaleGestureDetector!!.isInProgress) {
                 restrictedXDistance = -bounds.left
-            } else if (bounds.right >= width && bounds.right + xdistance < width && !scaleDetector!!.isInProgress) {
+            } else if (bounds.right >= width && bounds.right + xdistance < width && !scaleGestureDetector!!.isInProgress) {
                 restrictedXDistance = width - bounds.right
             }
-        } else if (!scaleDetector!!.isInProgress) {
+        } else if (!scaleGestureDetector!!.isInProgress) {
             if (bounds.left >= 0 && bounds.left + xdistance < 0) {
                 restrictedXDistance = -bounds.left
             } else if (bounds.right <= width && bounds.right + xdistance > width) {
@@ -625,12 +711,12 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     private fun getRestrictedYDistance(ydistance: Float): Float {
         var restrictedYDistance = ydistance
         if (currentDisplayedHeight >= height) {
-            if (bounds.top <= 0 && bounds.top + ydistance > 0 && !scaleDetector!!.isInProgress) {
+            if (bounds.top <= 0 && bounds.top + ydistance > 0 && !scaleGestureDetector!!.isInProgress) {
                 restrictedYDistance = -bounds.top
-            } else if (bounds.bottom >= height && bounds.bottom + ydistance < height && !scaleDetector!!.isInProgress) {
+            } else if (bounds.bottom >= height && bounds.bottom + ydistance < height && !scaleGestureDetector!!.isInProgress) {
                 restrictedYDistance = height - bounds.bottom
             }
-        } else if (!scaleDetector!!.isInProgress) {
+        } else if (!scaleGestureDetector!!.isInProgress) {
             if (bounds.top >= 0 && bounds.top + ydistance < 0) {
                 restrictedYDistance = -bounds.top
             } else if (bounds.bottom <= height && bounds.bottom + ydistance > height) {
@@ -641,7 +727,6 @@ open class ZoomageView : AppCompatImageView, ScaleGestureDetector.OnScaleGesture
     }
 
     override fun onScale(detector: ScaleGestureDetector): Boolean {
-
         //calculate value we should scale by, ultimately the scale will be startScale*scaleFactor
         scaleBy = startScale * detector.scaleFactor / matrixValues[Matrix.MSCALE_X]
 
