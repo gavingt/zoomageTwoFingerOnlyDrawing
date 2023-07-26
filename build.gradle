@@ -18,7 +18,6 @@ buildscript {
 }
 
 plugins {
-    id "com.jfrog.bintray" version "1.8.4"
     id "com.jfrog.artifactory" version "4.9.3"
     id 'maven-publish'
 }
@@ -41,9 +40,4 @@ allprojects {
 
 task clean(type: Delete) {
     delete rootProject.buildDir
-}
-
-ext {
-    compileVersion = 28
-    targetVersion = 28
 }
